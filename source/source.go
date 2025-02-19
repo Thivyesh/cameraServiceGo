@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/accident-prediction-api/go-services/camera-service/types"
+	"github.com/Thivyesh/cameraServiceGo/types"
 	"gocv.io/x/gocv"
 )
 
@@ -71,6 +71,7 @@ func (s *VideoSource) Start(ctx context.Context) error {
 func (s *VideoSource) captureFrames(ctx context.Context) {
 	// Ensure cleanup on exit
 	defer s.closeOnce.Do(func() {
+		log.Printf("Cleaning up video source: %s", s.config.URI)
 		close(s.frames)
 		if s.capture != nil {
 			s.capture.Close()
@@ -83,25 +84,26 @@ func (s *VideoSource) captureFrames(ctx context.Context) {
 	defer img.Close()
 
 	frameID := int64(0)
+	log.Printf("Starting frame capture for source: %s", s.config.URI)
 
 	for s.isActive {
 		select {
 		case <-ctx.Done():
-			// Context cancelled, stop capturing
+			log.Printf("Context cancelled for source: %s", s.config.URI)
 			return
 		default:
 			// Read next frame
 			if ok := s.capture.Read(&img); !ok {
+				log.Printf("Failed to read frame from source: %s", s.config.URI)
 				if s.config.Type == "file" {
-					// Restart video file from beginning
 					s.capture.Set(gocv.VideoCapturePosFrames, 0)
 					continue
 				}
-				log.Printf("Failed to read from source: %s", s.config.URI)
 				return
 			}
 
 			if img.Empty() {
+				log.Printf("Received empty frame from source: %s", s.config.URI)
 				continue
 			}
 
@@ -112,11 +114,15 @@ func (s *VideoSource) captureFrames(ctx context.Context) {
 				continue
 			}
 
+			// Convert NativeByteBuffer to []byte
+			frameBytes := buf.GetBytes()
+			buf.Close()
+
 			// Create frame data
 			frame := types.FrameData{
 				ID:        frameID,
 				Timestamp: time.Now(),
-				Data:      buf,
+				Data:      frameBytes,
 				Source:    s.config.URI,
 			}
 			frameID++
@@ -124,9 +130,13 @@ func (s *VideoSource) captureFrames(ctx context.Context) {
 			// Send frame to channel, skip if buffer full
 			select {
 			case s.frames <- frame:
-				// Frame sent successfully
+				if frameID%30 == 0 { // Log every 30 frames
+					log.Printf("Sent frame %d from source: %s (size: %d bytes)",
+						frameID, s.config.URI, len(frameBytes))
+				}
 			default:
-				log.Printf("Frame buffer full, dropping frame")
+				log.Printf("Frame buffer full, dropping frame %d from source: %s",
+					frameID, s.config.URI)
 			}
 		}
 	}

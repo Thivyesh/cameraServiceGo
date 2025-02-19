@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/yourusername/accident-prediction-api/go-services/camera-service/source"
-	"github.com/yourusername/accident-prediction-api/go-services/camera-service/types"
+	"github.com/Thivyesh/cameraServiceGo/source"
+	"github.com/Thivyesh/cameraServiceGo/types"
 )
 
 // CameraService manages multiple video sources and their subscribers
@@ -40,7 +40,9 @@ func (s *CameraService) AddSource(ctx context.Context, config types.SourceConfig
 
 	// Create and initialize new source
 	videoSource := source.NewVideoSource(config)
-	if err := videoSource.Start(ctx); err != nil {
+
+	bgCtx := context.Background()
+	if err := videoSource.Start(bgCtx); err != nil {
 		return "", fmt.Errorf("failed to start source: %v", err)
 	}
 
@@ -49,7 +51,7 @@ func (s *CameraService) AddSource(ctx context.Context, config types.SourceConfig
 	s.subscribers[sourceID] = make([]chan types.FrameData, 0)
 
 	// Start frame distribution
-	go s.distributeFrames(ctx, sourceID)
+	go s.distributeFrames(bgCtx, sourceID)
 
 	return sourceID, nil
 }
@@ -59,7 +61,7 @@ func (s *CameraService) Subscribe(sourceID string) (<-chan types.FrameData, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	source, exists := s.sources[sourceID]
+	_, exists := s.sources[sourceID]
 	if !exists {
 		return nil, fmt.Errorf("source not found: %s", sourceID)
 	}

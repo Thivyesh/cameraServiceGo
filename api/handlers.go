@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/Thivyesh/accident-prediction-api/go-services/camera-service/api/types"
-	"github.com/Thivyesh/accident-prediction-api/go-services/camera-service/service"
+	"github.com/Thivyesh/cameraServiceGo/service"
+	"github.com/Thivyesh/cameraServiceGo/types"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
@@ -21,7 +21,14 @@ func NewHandler(svc *service.CameraService) *Handler {
 }
 
 // HandleAddSource handles requests to add a new video source
-// POST /api/sources
+// @Summary Add new video source
+// @Description Add a new camera or video source to the service
+// @Tags sources
+// @Accept json
+// @Produce json
+// @Param config body types.SourceConfig true "Source configuration"
+// @Success 200 {object} map[string]string
+// @Router /sources [post]
 func (h *Handler) HandleAddSource(w http.ResponseWriter, r *http.Request) {
 	// Parse request body
 	var config types.SourceConfig
@@ -46,14 +53,24 @@ func (h *Handler) HandleAddSource(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleListSources handles requests to list all sources
-// GET /api/sources
+// @Summary List all sources
+// @Description Get a list of all configured video sources
+// @Tags sources
+// @Produce json
+// @Success 200 {array} types.SourceInfo
+// @Router /sources [get]
 func (h *Handler) HandleListSources(w http.ResponseWriter, r *http.Request) {
 	sources := h.service.ListSources()
 	json.NewEncoder(w).Encode(sources)
 }
 
 // HandleRemoveSource handles requests to remove a source
-// DELETE /api/sources/{id}
+// @Summary Remove a video source
+// @Description Remove a video source by its ID
+// @Tags sources
+// @Param id path string true "Source ID"
+// @Success 200 "Source removed successfully"
+// @Router /sources/{id} [delete]
 func (h *Handler) HandleRemoveSource(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sourceID := vars["id"]
@@ -66,8 +83,13 @@ func (h *Handler) HandleRemoveSource(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// HandleStreamFrames handles Websocket connections for fram streaming
-// WS /api/sources/{id}/stream
+// HandleStreamFrames handles Websocket connections for frame streaming
+// @Summary Stream video frames
+// @Description Get real-time video frames via WebSocket
+// @Tags stream
+// @Param id path string true "Source ID"
+// @Success 101 "Switching to WebSocket protocol"
+// @Router /sources/{id}/stream [get]
 func (h *Handler) HandleStreamFrames(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sourceID := vars["id"]
