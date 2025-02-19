@@ -1,0 +1,104 @@
+basePath: /api
+definitions:
+  types.SourceConfig:
+    description: Configuration for a video source
+    properties:
+      type:
+        description: '@Description Type of video source (webcam, file, ip_camera)'
+        type: string
+      uri:
+        description: '@Description URI or identifier for the video source'
+        type: string
+    type: object
+  types.SourceInfo:
+    description: Information about a video source
+    properties:
+      id:
+        description: '@Description Unique identifier for the source'
+        type: string
+      is_streaming:
+        description: '@Description Whether the source is currently streaming'
+        type: boolean
+      type:
+        description: '@Description Type of video source'
+        type: string
+      uri:
+        description: '@Description URI of the video source'
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: A real-time video streaming service with multiple camera sources
+  title: Camera Service API
+  version: "1.0"
+paths:
+  /sources:
+    get:
+      description: Get a list of all configured video sources
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/types.SourceInfo'
+            type: array
+      summary: List all sources
+      tags:
+      - sources
+    post:
+      consumes:
+      - application/json
+      description: Add a new camera or video source to the service
+      parameters:
+      - description: Source configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/types.SourceConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add new video source
+      tags:
+      - sources
+  /sources/{id}:
+    delete:
+      description: Remove a video source by its ID
+      parameters:
+      - description: Source ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: Source removed successfully
+      summary: Remove a video source
+      tags:
+      - sources
+  /sources/{id}/stream:
+    get:
+      description: Get real-time video frames via WebSocket
+      parameters:
+      - description: Source ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "101":
+          description: Switching to WebSocket protocol
+      summary: Stream video frames
+      tags:
+      - stream
+swagger: "2.0"
