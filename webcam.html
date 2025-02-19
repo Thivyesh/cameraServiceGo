@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Webcam Stream (Canvas)</title>
+    <style>
+        #videoCanvas {
+            max-width: 800px;
+            border: 1px solid #ccc;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        #status {
+            color: #c00;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .debug {
+            font-family: monospace;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f0f0f0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Webcam Stream</h1>
+    <canvas id="videoCanvas"></canvas>
+    <div class="controls">
+        <button id="startBtn">Start Stream</button>
+        <button id="stopBtn">Stop Stream</button>
+        <select id="sizeSelect">
+            <option value="640x480">640x480</option>
+            <option value="800x600">800x600</option>
+            <option value="1280x720">1280x720</option>
+        </select>
+    </div>
+    <div id="status"></div>
+    <div id="fps"></div>
+    <div id="debug" class="debug"></div>
+
+    <script>
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const fpsDiv = document.getElementById('fps');
+        const debugDiv = document.getElementById('debug');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const sizeSelect = document.getElementById('sizeSelect');
+
+        let sourceId = null;
+        let ws = null;
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let reconnectAttempts = 0;
+        let isIntentionalStop = false;
+        const MAX_RECONNECT_ATTEMPTS = 3;
+        
+        // Set initial canvas size
+        canvas.width = 640;
+        canvas.height = 480;
+
+        function log(message) {
+            console.log(message);
+            debugDiv.innerHTML += `${new Date().toISOString()}: ${message}<br>`;
+            debugDiv.scrollTop = debugDiv.scrollHeight;
+        }
+
+        function updateCanvasSize(size) {
+            const [width, height] = size.split('x').map(Number);
+            canvas.width = width;
+            canvas.height = height;
+            log(`Canvas size updated to ${width}x${height}`);
+        }
+
+        sizeSelect.addEventListener('change', (e) => {
+            updateCanvasSize(e.target.value);
+        });
+
+        setInterval(() => {
+            const currentTime = performance.now();
+            const elapsed = (currentTime - lastTime) / 1000;
+            const fps = Math.round(frameCount / elapsed);
+            fpsDiv.textContent = `FPS: ${fps}`;
+            frameCount = 0;
+            lastTime = currentTime;
+        }, 1000);
+
+        async function addWebcamSource() {
+            try {
+                log('Adding webcam source...');
+                const response = await fetch('http://localhost:8080/api/sources', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        type: 'webcam',
+                        uri: '0'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                sourceId = data.source_id;
+                log(`Source added successfully with ID: ${sourceId}`);
+                statusDiv.textContent = `Source added with ID: ${sourceId}`;
+                
+                startStreaming(sourceId);
+            } catch (error) {
+                log(`Error adding source: ${error.message}`);
+                statusDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function startStreaming(sourceId) {
+            if (ws) {
+                ws.close();
+            }
+
+            if (isIntentionalStop) {
+                return;
+            }
+
+            log(`Starting WebSocket connection for source: ${sourceId}`);
+            ws = new WebSocket(`ws://localhost:8080/api/sources/${sourceId}/stream`);
+            
+            ws.onopen = () => {
+                log('WebSocket connected');
+                statusDiv.textContent = 'WebSocket connected. Streaming...';
+                reconnectAttempts = 0;
+            };
+
+            ws.onmessage = async (event) => {
+                try {
+                    const blob = new Blob([event.data], { type: 'image/jpeg' });
+                    const imageUrl = URL.createObjectURL(blob);
+                    
+                    const img = new Image();
+                    img.onload = () => {
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        URL.revokeObjectURL(imageUrl);
+                        frameCount++;
+                    };
+                    img.onerror = (err) => {
+                        log(`Error loading image: ${err}`);
+                    };
+                    img.src = imageUrl;
+                } catch (error) {
+                    log(`Error processing frame: ${error.message}`);
+                }
+            };
+
+            ws.onerror = (error) => {
+                log(`WebSocket error: ${error.message || 'Unknown error'}`);
+                statusDiv.textContent = `WebSocket error: ${error.message}`;
+            };
+
+            ws.onclose = (event) => {
+                log(`WebSocket closed: ${event.code} - ${event.reason}`);
+                statusDiv.textContent = 'WebSocket connection closed';
+                
+                if (!isIntentionalStop && sourceId && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    log(`Attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+                    setTimeout(() => startStreaming(sourceId), 1000);
+                }
+            };
+        }
+
+        async function stopStream() {
+            log('Stopping stream...');
+            isIntentionalStop = true;
+            
+            if (ws) {
+                ws.close();
+            }
+            
+            if (sourceId) {
+                try {
+                    const response = await fetch(`http://localhost:8080/api/sources/${sourceId}`, {
+                        method: 'DELETE'
+                    });
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    log('Stream stopped successfully');
+                    sourceId = null;
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    statusDiv.textContent = 'Stream stopped';
+                } catch (error) {
+                    log(`Error stopping stream: ${error.message}`);
+                    statusDiv.textContent = `Error stopping stream: ${error.message}`;
+                }
+            }
+
+            reconnectAttempts = 0;
+            isIntentionalStop = false;
+        }
+
+        startBtn.addEventListener('click', () => {
+            if (!sourceId) {
+                isIntentionalStop = false;
+                addWebcamSource();
+            }
+        });
+
+        stopBtn.addEventListener('click', stopStream);
+
+        window.onbeforeunload = stopStream;
+    </script>
+</body>
+</html> 

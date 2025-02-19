@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Multiple Camera Streams</title>
+    <style>
+        .stream-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .stream {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .videoCanvas {
+            width: 320px;
+            height: 240px;
+            border: 1px solid #999;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        .status {
+            color: #c00;
+            font-weight: bold;
+        }
+        .debug {
+            font-family: monospace;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f0f0f0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Multiple Camera Streams (Shared Source)</h1>
+    <div class="controls">
+        <button id="addStreamBtn">Add Viewer</button>
+        <button id="stopAllBtn">Stop All</button>
+    </div>
+    <div class="stream-container" id="streamContainer"></div>
+    <div id="debug" class="debug"></div>
+
+    <script>
+        const debugDiv = document.getElementById('debug');
+        const streamContainer = document.getElementById('streamContainer');
+        let streams = new Map(); // Map to store stream information
+        let sharedSourceId = null; // Shared source ID for all streams
+
+        function log(message) {
+            console.log(message);
+            debugDiv.innerHTML += `${new Date().toISOString()}: ${message}<br>`;
+            debugDiv.scrollTop = debugDiv.scrollHeight;
+        }
+
+        class StreamView {
+            constructor(id) {
+                this.streamId = id;
+                this.isIntentionalStop = false;
+                this.reconnectAttempts = 0;
+                this.MAX_RECONNECT_ATTEMPTS = 3;
+                this.frameCount = 0;
+                this.lastTime = performance.now();
+                this.ws = null;
+
+                this.createStreamElement();
+                this.startFPSCounter();
+            }
+
+            createStreamElement() {
+                const streamDiv = document.createElement('div');
+                streamDiv.className = 'stream';
+                streamDiv.innerHTML = `
+                    <h3>Stream ${this.streamId}</h3>
+                    <canvas class="videoCanvas" id="canvas_${this.streamId}"></canvas>
+                    <div class="stream-controls">
+                        <button class="startBtn">Start</button>
+                        <button class="stopBtn">Stop</button>
+                        <span class="status"></span>
+                        <div class="fps">FPS: 0</div>
+                    </div>
+                `;
+
+                this.element = streamDiv;
+                this.canvas = streamDiv.querySelector('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.status = streamDiv.querySelector('.status');
+                this.fpsDiv = streamDiv.querySelector('.fps');
+                
+                this.canvas.width = 320;
+                this.canvas.height = 240;
+
+                streamDiv.querySelector('.startBtn').addEventListener('click', () => this.start());
+                streamDiv.querySelector('.stopBtn').addEventListener('click', () => this.stop());
+
+                streamContainer.appendChild(streamDiv);
+            }
+
+            startFPSCounter() {
+                setInterval(() => {
+                    const currentTime = performance.now();
+                    const elapsed = (currentTime - this.lastTime) / 1000;
+                    const fps = Math.round(this.frameCount / elapsed);
+                    this.fpsDiv.textContent = `FPS: ${fps}`;
+                    this.frameCount = 0;
+                    this.lastTime = currentTime;
+                }, 1000);
+            }
+
+            async start() {
+                if (!sharedSourceId) {
+                    // Only create source if it doesn't exist
+                    try {
+                        log(`Creating shared webcam source...`);
+                        const response = await fetch('http://localhost:8080/api/sources', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                type: 'webcam',
+                                uri: '0'
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        
+                        const data = await response.json();
+                        sharedSourceId = data.source_id;
+                        log(`Shared source created with ID: ${sharedSourceId}`);
+                    } catch (error) {
+                        log(`Error creating shared source: ${error.message}`);
+                        this.status.textContent = `Error: ${error.message}`;
+                        return;
+                    }
+                }
+
+                this.status.textContent = `Connected to source: ${sharedSourceId}`;
+                this.startStreaming();
+            }
+
+            startStreaming() {
+                if (this.ws) {
+                    this.ws.close();
+                }
+
+                if (this.isIntentionalStop) return;
+
+                log(`Stream ${this.streamId}: Starting WebSocket connection...`);
+                this.ws = new WebSocket(`ws://localhost:8080/api/sources/${sharedSourceId}/stream`);
+                
+                this.ws.onopen = () => {
+                    log(`Stream ${this.streamId}: WebSocket connected`);
+                    this.status.textContent = 'Streaming...';
+                    this.reconnectAttempts = 0;
+                };
+
+                this.ws.onmessage = async (event) => {
+                    try {
+                        const blob = new Blob([event.data], { type: 'image/jpeg' });
+                        const imageUrl = URL.createObjectURL(blob);
+                        
+                        const img = new Image();
+                        img.onload = () => {
+                            this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+                            URL.revokeObjectURL(imageUrl);
+                            this.frameCount++;
+                        };
+                        img.onerror = (err) => {
+                            log(`Stream ${this.streamId}: Error loading image: ${err}`);
+                        };
+                        img.src = imageUrl;
+                    } catch (error) {
+                        log(`Stream ${this.streamId}: Error processing frame: ${error.message}`);
+                    }
+                };
+
+                this.ws.onerror = (error) => {
+                    log(`Stream ${this.streamId}: WebSocket error: ${error.message || 'Unknown error'}`);
+                    this.status.textContent = 'Error';
+                };
+
+                this.ws.onclose = (event) => {
+                    log(`Stream ${this.streamId}: WebSocket closed: ${event.code} - ${event.reason}`);
+                    this.status.textContent = 'Disconnected';
+                    
+                    if (!this.isIntentionalStop && sharedSourceId && this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
+                        this.reconnectAttempts++;
+                        log(`Stream ${this.streamId}: Attempting to reconnect (${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})...`);
+                        setTimeout(() => this.startStreaming(), 1000);
+                    }
+                };
+            }
+
+            async stop() {
+                log(`Stream ${this.streamId}: Stopping...`);
+                this.isIntentionalStop = true;
+                
+                if (this.ws) {
+                    this.ws.close();
+                }
+                
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.status.textContent = 'Stopped';
+                this.reconnectAttempts = 0;
+                this.isIntentionalStop = false;
+            }
+
+            remove() {
+                this.stop();
+                this.element.remove();
+            }
+        }
+
+        // Add Stream button handler
+        document.getElementById('addStreamBtn').addEventListener('click', () => {
+            const streamId = streams.size + 1;
+            const streamView = new StreamView(streamId);
+            streams.set(streamId, streamView);
+        });
+
+        // Stop All button handler
+        document.getElementById('stopAllBtn').addEventListener('click', async () => {
+            for (const stream of streams.values()) {
+                await stream.stop();
+            }
+            
+            // Only delete the source when stopping all streams
+            if (sharedSourceId) {
+                try {
+                    const response = await fetch(`http://localhost:8080/api/sources/${sharedSourceId}`, {
+                        method: 'DELETE'
+                    });
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    log('Shared source stopped successfully');
+                    sharedSourceId = null;
+                } catch (error) {
+                    log(`Error stopping shared source: ${error.message}`);
+                }
+            }
+        });
+
+        // Cleanup on page unload
+        window.onbeforeunload = async () => {
+            for (const stream of streams.values()) {
+                await stream.stop();
+            }
+            
+            if (sharedSourceId) {
+                try {
+                    await fetch(`http://localhost:8080/api/sources/${sharedSourceId}`, {
+                        method: 'DELETE'
+                    });
+                } catch (error) {
+                    console.error('Error cleaning up:', error);
+                }
+            }
+        };
+    </script>
+</body>
+</html> 
